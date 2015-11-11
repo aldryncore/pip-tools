@@ -147,7 +147,7 @@ class Resolver(object):
         constraints = sorted(self.constraints, key=_dep_key)
         log.debug('Current constraints:')
         for constraint in constraints:
-            upstream.setdefault(constraint.req, []).append('requirements.in')
+            upstream.setdefault(constraint.req, [])
             log.debug('  {}'.format(constraint))
 
         log.debug('')
