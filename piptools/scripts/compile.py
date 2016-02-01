@@ -1,29 +1,30 @@
 # coding: utf-8
-# isort:skip_file
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import optparse
+import os
 import sys
+import tempfile
+
 import pip
-import logging
+from pip.req import parse_requirements
 
-# Make sure we're using a reasonably modern version of pip
-if not tuple(int(digit) for digit in pip.__version__.split('.')[:2]) >= (6, 1):
-    print('pip-compile requires at least version 6.1 of pip ({} found), '
-          'perhaps run `pip install --upgrade pip`?'.format(pip.__version__))
-    sys.exit(4)
-
-from .. import click  # noqa
-from pip.req import parse_requirements  # noqa
-
-from ..exceptions import PipToolsError  # noqa
-from ..logging import log  # noqa
-from ..repositories import PyPIRepository  # noqa
-from ..resolver import Resolver  # noqa
-from ..writer import OutputWriter  # noqa
+from .. import click
+from ..exceptions import PipToolsError
+from ..logging import log
+from ..repositories import LocalRequirementsRepository, PyPIRepository
+from ..resolver import Resolver
+from ..utils import is_pinned_requirement, pip_version_info
+from ..writer import OutputWriter
 
 DEFAULT_REQUIREMENTS_FILE = 'requirements.in'
+
+# Make sure we're using a reasonably modern version of pip
+if not pip_version_info >= (7, 0):
+    print('pip-compile requires at least version 7.0 of pip ({} found), '
+          'perhaps run `pip install --upgrade pip`?'.format(pip.__version__))
+    sys.exit(4)
 
 
 # emulate pip's option parsing with a stub command
@@ -32,9 +33,10 @@ class PipCommand(pip.basecommand.Command):
 
 
 @click.command()
+@click.version_option()
 @click.option('-v', '--verbose', is_flag=True, help="Show more output")
 @click.option('-d', '--debug', is_flag=True, help="Show debug logging output")
-@click.option('--dry-run', is_flag=True, help="Only show what would happen, don't change anything")
+@click.option('-n', '--dry-run', is_flag=True, help="Only show what would happen, don't change anything")
 @click.option('-p', '--pre', is_flag=True, default=None, help="Allow resolving to prereleases (default is not)")
 @click.option('-r', '--rebuild', is_flag=True, help="Clear any caches upfront, rebuild from scratch")
 @click.option('-f', '--find-links', multiple=True, help="Look for archives in this directory or on this HTML page", envvar='PIP_FIND_LINKS')  # noqa
@@ -44,12 +46,21 @@ class PipCommand(pip.basecommand.Command):
 @click.option('--trusted-host', multiple=True, envvar='PIP_TRUSTED_HOST',
               help="Mark this host as trusted, even though it does not have "
                    "valid or any HTTPS.")
-@click.option('--header/--no-header', is_flag=True, default=True, help="Add header to generated file")
+@click.option('--header/--no-header', is_flag=True, default=True,
+              help="Add header to generated file")
+@click.option('--index/--no-index', is_flag=True, default=True,
+              help="Add index URL to generated file")
 @click.option('--annotate/--no-annotate', is_flag=True, default=True,
               help="Annotate results, indicating where dependencies come from")
-@click.argument('src_file', required=False, type=click.Path(exists=True), default=DEFAULT_REQUIREMENTS_FILE)
+@click.option('--upgrade', is_flag=True, default=False,
+              help='Try to upgrade all dependencies to their latest versions')
+@click.option('-o', '--output-file', nargs=1, type=str, default=None,
+              help=('Output file name. Required if more than one input file is given. '
+                    'Will be derived from input file otherwise.'))
+@click.argument('src_files', nargs=-1, type=click.Path(exists=True, allow_dash=True))
 def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
-        client_cert, trusted_host, header, annotate, src_file, debug):
+        client_cert, trusted_host, header, index, annotate, upgrade,
+        output_file, src_files, debug):
     """Compiles requirements.txt from requirements.in specs."""
     if debug:
         root = logging.getLogger()
@@ -63,9 +74,24 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
 
     log.verbose = verbose
 
-    if not src_file:
-        log.warning('No input files to process')
-        sys.exit(2)
+    if len(src_files) == 0:
+        if not os.path.exists(DEFAULT_REQUIREMENTS_FILE):
+            raise click.BadParameter(("If you do not specify an input file, "
+                                      "the default is {}").format(DEFAULT_REQUIREMENTS_FILE))
+        src_files = (DEFAULT_REQUIREMENTS_FILE,)
+
+    if len(src_files) == 1 and src_files[0] == '-':
+        if not output_file:
+            raise click.BadParameter('--output-file is required if input is from stdin')
+
+    if len(src_files) > 1 and not output_file:
+        raise click.BadParameter('--output-file is required if two or more input files are given.')
+
+    if output_file:
+        dst_file = output_file
+    else:
+        base_name, _, _ = src_files[0].rpartition('.')
+        dst_file = base_name + '.txt'
 
     ###
     # Setup
@@ -85,12 +111,13 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
 
     pip_args = []
     if find_links:
-        pip_args.extend(['-f', find_links])
+        for link in find_links:
+            pip_args.extend(['-f', link])
     if index_url:
         pip_args.extend(['-i', index_url])
     if extra_index_url:
-        for url in extra_index_url:
-            pip_args.extend(['--extra-index-url', url])
+        for extra_index in extra_index_url:
+            pip_args.extend(['--extra-index-url', extra_index])
     if client_cert:
         pip_args.extend(['--client-cert', client_cert])
     if pre:
@@ -103,6 +130,16 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
 
     session = pip_cmd._build_session(pip_options)
     repository = PyPIRepository(pip_options, session)
+
+    # Proxy with a LocalRequirementsRepository if --upgrade is not specified
+    # (= default invocation)
+    if not upgrade and os.path.exists(dst_file):
+        existing_pins = dict()
+        ireqs = parse_requirements(dst_file, finder=repository.finder, session=repository.session, options=pip_options)
+        for ireq in ireqs:
+            if is_pinned_requirement(ireq):
+                existing_pins[ireq.req.project_name.lower()] = ireq
+        repository = LocalRequirementsRepository(existing_pins, repository)
 
     log.debug('Using indexes:')
     for index_url in repository.finder.index_urls:
@@ -117,12 +154,25 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
     ###
     # Parsing/collecting initial requirements
     ###
+
     constraints = []
-    for line in parse_requirements(src_file, finder=repository.finder, session=repository.session, options=pip_options):
-        constraints.append(line)
+    for src_file in src_files:
+        if src_file == '-':
+            # pip requires filenames and not files. Since we want to support
+            # piping from stdin, we need to briefly save the input from stdin
+            # to a temporary file and have pip read that.
+            with tempfile.NamedTemporaryFile() as tmpfile:
+                tmpfile.write(sys.stdin.read())
+                tmpfile.flush()
+                constraints.extend(parse_requirements(
+                    tmpfile.name, finder=repository.finder, session=repository.session, options=pip_options))
+        else:
+            constraints.extend(parse_requirements(
+                src_file, finder=repository.finder, session=repository.session, options=pip_options))
 
     try:
-        resolver = Resolver(constraints, repository, prereleases=pre, clear_caches=rebuild)
+        resolver = Resolver(constraints, repository, prereleases=pre,
+                            clear_caches=rebuild)
         results = resolver.resolve()
     except PipToolsError as e:
         log.error(str(e))
@@ -159,7 +209,8 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
     if annotate:
         reverse_dependencies = resolver.reverse_dependencies(results)
 
-    writer = OutputWriter(src_file, dry_run=dry_run, header=header,
+    writer = OutputWriter(src_file, dst_file, dry_run=dry_run,
+                          emit_header=header, emit_index=index,
                           annotate=annotate,
                           default_index_url=repository.DEFAULT_INDEX_URL,
                           index_urls=repository.finder.index_urls)

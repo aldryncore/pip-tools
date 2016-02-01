@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 
 setup(
     name='pip-tools',
-    version='1.1.6.2',
+    version='1.5.0.1',
     url='https://github.com/nvie/pip-tools/',
     license='BSD',
     author='Vincent Driessen',
@@ -13,7 +13,7 @@ setup(
     description=__doc__,
     packages=find_packages(exclude=['tests']),
     install_requires=[
-        'click',
+        'click>=6',
         'first',
         'six',
     ],
@@ -48,6 +48,7 @@ setup(
         # 'Programming Language :: Python :: 3.2',
         # 'Programming Language :: Python :: 3.3',
         'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: 3.5',
         'Intended Audience :: Developers',
         'Intended Audience :: System Administrators',
         'License :: OSI Approved :: BSD License',

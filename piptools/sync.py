@@ -1,8 +1,7 @@
 import collections
+from subprocess import check_call
 
 from . import click
-import pip
-
 from .exceptions import IncompatibleRequirements, UnsupportedConstraint
 from .utils import flat_map
 
@@ -71,7 +70,7 @@ def merge(requirements, ignore_conflicts):
                    'Perhaps add -e option?')
             raise UnsupportedConstraint(msg, ireq)
 
-        key = ireq.req.key
+        key = ireq.link or ireq.req.key
 
         if not ignore_conflicts:
             existing_ireq = by_key.get(key)
@@ -92,7 +91,7 @@ def diff(compiled_requirements, installed_dists):
     Calculate which packages should be installed or uninstalled, given a set
     of compiled requirements and a list of currently installed modules.
     """
-    requirements_lut = {r.req.key: r for r in compiled_requirements}
+    requirements_lut = {r.link or r.req.key: r for r in compiled_requirements}
 
     satisfied = set()  # holds keys
     to_install = set()  # holds keys-and-versions
@@ -108,7 +107,7 @@ def diff(compiled_requirements, installed_dists):
 
     for key, requirement in requirements_lut.items():
         if key not in satisfied:
-            to_install.add(str(requirement.req))
+            to_install.add(str(requirement.link or requirement.req))
 
     # Make sure to not uninstall any packages that should be ignored
     to_uninstall -= set(pkgs_to_ignore)
@@ -116,16 +115,18 @@ def diff(compiled_requirements, installed_dists):
     return (to_install, to_uninstall)
 
 
-def sync(to_install, to_uninstall, verbose=False, dry_run=False):
+def sync(to_install, to_uninstall, verbose=False, dry_run=False, pip_flags=None, install_flags=None):
     """
     Install and uninstalls the given sets of modules.
     """
     if not to_uninstall and not to_install:
         click.echo("Everything up-to-date")
 
-    pip_flags = []
+    if pip_flags is None:
+        pip_flags = []
+
     if not verbose:
-        pip_flags.append('-q')
+        pip_flags += ['-q']
 
     if to_uninstall:
         if dry_run:
@@ -133,12 +134,15 @@ def sync(to_install, to_uninstall, verbose=False, dry_run=False):
             for pkg in to_uninstall:
                 click.echo("  {}".format(pkg))
         else:
-            pip.main(["uninstall", '-y'] + pip_flags + [pkg for pkg in to_uninstall])
+            check_call(['pip', 'uninstall', '-y'] + pip_flags + sorted(to_uninstall))
 
     if to_install:
+        if install_flags is None:
+            install_flags = []
         if dry_run:
             click.echo("Would install:")
             for pkg in to_install:
                 click.echo("  {}".format(pkg))
         else:
-            pip.main(["install"] + pip_flags + [pkg for pkg in to_install])
+            check_call(['pip', 'install'] + pip_flags + install_flags + sorted(to_install))
+    return 0
