@@ -39,7 +39,7 @@ def format_requirement(ireq, include_specifier=True):
         if ireq.editable:
             line = '-e '
         line += ireq.link.url
-        if False and is_vcs_url(ireq.link):
+        if False and is_vcs_url(ireq.link):  # TODO: This does not always work
             vcs_backend = _get_used_vcs_backend(ireq.link)
             rev = vcs_backend.get_revision(ireq.source_dir)
             line += '@{}'.format(rev)

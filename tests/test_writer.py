@@ -19,7 +19,7 @@ def test_format_requirement_annotation_editable(from_editable, writer):
     assert (writer._format_requirement(ireq,
                                        reverse_dependencies,
                                        primary_packages=[]) ==
-            '-e git+git://fake.org/x/y.git#egg=y' + comment('  # via xyz'))
+            '-e git+git://fake.org/x/y.git#egg=y' + comment('  # via xyz, got y'))
 
 
 def test_format_requirement_annotation(from_line, writer):

@@ -107,7 +107,7 @@ class OutputWriter(object):
             annotations.append('got {}'.format(ireq.req))
 
         if annotations:
-            msg = '   # ' + ','.join(annotations)
+            msg = '  # ' + ', '.join(annotations)
             line += comment(msg)
 
         return line
