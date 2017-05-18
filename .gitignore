@@ -18,3 +18,12 @@ dist
 *.egg-info
 .coverage
 .cache
+
+# IDE
+.idea
+venv/
+
+# Test files
+requirements.in
+requirements.txt
+.eggs/

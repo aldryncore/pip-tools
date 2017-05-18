@@ -10,7 +10,7 @@ from pkg_resources import Requirement
 
 from .exceptions import PipToolsError
 from .locations import CACHE_DIR
-from .utils import lookup_table, as_tuple
+from .utils import as_tuple, key_from_req, lookup_table
 
 
 class CorruptCacheError(PipToolsError):
@@ -51,6 +51,8 @@ class DependencyCache(object):
     def __init__(self, cache_dir=None):
         if cache_dir is None:
             cache_dir = CACHE_DIR
+        if not os.path.isdir(cache_dir):
+            os.makedirs(cache_dir)
         py_version = '.'.join(str(digit) for digit in sys.version_info[:2])
         cache_filename = 'depcache-py{}.json'.format(py_version)
 
@@ -157,6 +159,6 @@ class DependencyCache(object):
         """
         # First, collect all the dependencies into a sequence of (parent, child) tuples, like [('flake8', 'pep8'),
         # ('flake8', 'mccabe'), ...]
-        return lookup_table((Requirement.parse(dep_name).key, name)
+        return lookup_table((key_from_req(Requirement.parse(dep_name)), name)
                             for name, version_and_extras in cache_keys
                             for dep_name in self.cache[name][version_and_extras])

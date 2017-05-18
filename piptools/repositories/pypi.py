@@ -2,12 +2,17 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import hashlib
 import os
 from shutil import rmtree
 
-from pip.download import PipSession
+from pip.download import unpack_url
 from pip.index import PackageFinder
 from pip.req.req_set import RequirementSet
+try:
+    from pip.utils.hashes import FAVORITE_HASH
+except ImportError:
+    FAVORITE_HASH = 'sha256'
 
 from ..cache import CACHE_DIR
 from ..exceptions import NoCandidateFound
@@ -30,11 +35,8 @@ class PyPIRepository(BaseRepository):
     config), but any other PyPI mirror can be used if index_urls is
     changed/configured on the Finder.
     """
-    def __init__(self, pip_options, session=None):
-        self.session = session or PipSession()
-
-        if pip_options.client_cert:
-            self.session.cert = pip_options.client_cert
+    def __init__(self, pip_options, session):
+        self.session = session
 
         index_urls = [pip_options.index_url] + pip_options.extra_index_urls
         if pip_options.no_index:
@@ -54,6 +56,11 @@ class PyPIRepository(BaseRepository):
         # versions reported by PyPI, so we only have to ask once for each
         # project
         self._available_candidates_cache = {}
+
+        # stores InstallRequirement => list(InstallRequirement) mappings
+        # of all secondary dependencies for the given requirement, so we
+        # only have to go to disk once for each requirement
+        self._dependencies_cache = {}
 
         # Setup file paths
         self.freshen_build_caches()
@@ -111,7 +118,7 @@ class PyPIRepository(BaseRepository):
 
         # Turn the candidate into a pinned InstallRequirement
         return make_install_requirement(
-            best_candidate.project, best_candidate.version, ireq.extras
+            best_candidate.project, best_candidate.version, ireq.extras, constraint=ireq.constraint
         )
 
     def get_dependencies(self, ireq):
@@ -123,15 +130,58 @@ class PyPIRepository(BaseRepository):
         if not (is_link_requirement(ireq) or is_pinned_requirement(ireq)):
             raise TypeError('Expected pinned or editable InstallRequirement, got {}'.format(ireq))
 
-        if not os.path.isdir(self._download_dir):
-            os.makedirs(self._download_dir)
-        if not os.path.isdir(self._wheel_download_dir):
-            os.makedirs(self._wheel_download_dir)
+        if ireq not in self._dependencies_cache:
 
-        reqset = RequirementSet(self.build_dir,
-                                self.source_dir,
-                                download_dir=self._download_dir,
-                                wheel_download_dir=self._wheel_download_dir,
-                                session=self.session)
-        dependencies = reqset._prepare_file(self.finder, ireq)
-        return set(dependencies)
+            if not os.path.isdir(self._download_dir):
+                os.makedirs(self._download_dir)
+            if not os.path.isdir(self._wheel_download_dir):
+                os.makedirs(self._wheel_download_dir)
+
+            reqset = RequirementSet(self.build_dir,
+                                    self.source_dir,
+                                    download_dir=self._download_dir,
+                                    wheel_download_dir=self._wheel_download_dir,
+                                    session=self.session)
+            self._dependencies_cache[ireq] = reqset._prepare_file(self.finder, ireq)
+        return set(self._dependencies_cache[ireq])
+
+    def get_hashes(self, ireq):
+        """
+        Given a pinned InstallRequire, returns a set of hashes that represent
+        all of the files for a given requirement. It is not acceptable for an
+        editable or unpinned requirement to be passed to this function.
+        """
+        if ireq.editable or not is_pinned_requirement(ireq):
+            raise TypeError(
+                "Expected pinned requirement, not unpinned or editable, got {}".format(ireq))
+
+        # We need to get all of the candidates that match our current version
+        # pin, these will represent all of the files that could possibly
+        # satisify this constraint.
+        all_candidates = self.find_all_candidates(ireq.name)
+        candidates_by_version = lookup_table(all_candidates, key=lambda c: c.version)
+        matching_versions = list(
+            ireq.specifier.filter((candidate.version for candidate in all_candidates)))
+        matching_candidates = candidates_by_version[matching_versions[0]]
+
+        return {
+            self._get_file_hash(candidate.location)
+            for candidate in matching_candidates
+        }
+
+    def _get_file_hash(self, location):
+        with TemporaryDirectory() as tmpdir:
+            unpack_url(
+                location, self.build_dir,
+                download_dir=tmpdir, only_download=True, session=self.session
+            )
+            files = os.listdir(tmpdir)
+            assert len(files) == 1
+            filename = os.path.abspath(os.path.join(tmpdir, files[0]))
+
+            h = hashlib.new(FAVORITE_HASH)
+            with open(filename, "rb") as fp:
+                for chunk in iter(lambda: fp.read(8096), b""):
+                    h.update(chunk)
+
+        return ":".join([FAVORITE_HASH, h.hexdigest()])

@@ -3,6 +3,7 @@ from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
 import os
+import copy
 from functools import partial
 from itertools import chain, count
 
@@ -13,7 +14,8 @@ from . import click
 from .cache import DependencyCache
 from .logging import log
 from .utils import (format_requirement, format_specifier, full_groupby,
-                    is_pinned_requirement, is_link_requirement)
+                    is_pinned_requirement, is_link_requirement,
+                    key_from_req, UNSAFE_PACKAGES)
 
 green = partial(click.style, fg='green')
 magenta = partial(click.style, fg='magenta')
@@ -23,11 +25,35 @@ def _dep_key(ireq):
     if ireq.req is None and ireq.link is not None:
         return ireq.link.url
     else:
-        return ireq.req.key
+        return key_from_req(ireq.req)
+
+
+class RequirementSummary(object):
+    """
+    Summary of a requirement's properties for comparison purposes.
+    """
+    def __init__(self, req):
+        self.req = req
+        self.key = key_from_req(req)
+        self.extras = str(sorted(req.extras))
+        self.specifier = str(req.specifier)
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+    def __hash__(self):
+        return hash(str(self))
+
+    def __str__(self):
+        extras = self.extras if self.extras != '[]' else ''
+        return '{}{}{}'.format(self.key, extras, self.specifier)
+
+    def __repr__(self):
+        return repr([self.key, self.specifier, self.extras])
 
 
 class Resolver(object):
-    def __init__(self, constraints, repository, cache=None, prereleases=False, clear_caches=False):
+    def __init__(self, constraints, repository, cache=None, prereleases=False, clear_caches=False, allow_unsafe=False):
         """
         This class resolves a given set of constraints (a collection of
         InstallRequirement objects) by consulting the given Repository and the
@@ -41,11 +67,18 @@ class Resolver(object):
         self.dependency_cache = cache
         self.prereleases = prereleases
         self.clear_caches = clear_caches
+        self.allow_unsafe = allow_unsafe
 
     @property
     def constraints(self):
         return set(self._group_constraints(chain(self.our_constraints,
                                                  self.their_constraints)))
+
+    def resolve_hashes(self, ireqs):
+        """
+        Finds acceptable hashes for all of the given InstallRequirements.
+        """
+        return {ireq: self.repository.get_hashes(ireq) for ireq in ireqs}
 
     def resolve(self, max_rounds=10):
         """
@@ -87,7 +120,8 @@ class Resolver(object):
             self.repository.freshen_build_caches()
 
         del os.environ['PIP_EXISTS_ACTION']
-        return best_matches
+        # Only include hard requirements and not pip constraints
+        return {req for req in best_matches if not req.constraint}
 
     def _group_constraints(self, constraints):
         """
@@ -113,13 +147,15 @@ class Resolver(object):
                 continue
 
             ireqs = iter(ireqs)
-            combined_ireq = next(ireqs)
+            # deepcopy the accumulator so as to not modify the self.our_constraints invariant
+            combined_ireq = copy.deepcopy(next(ireqs))
             combined_ireq.comes_from = None
             for ireq in ireqs:
                 # NOTE we may be losing some info on dropped reqs here
                 combined_ireq.req.specifier &= ireq.req.specifier
+                combined_ireq.constraint &= ireq.constraint
                 # Return a sorted, de-duped tuple of extras
-                combined_ireq.extras = tuple(sorted(set(combined_ireq.extras + ireq.extras)))
+                combined_ireq.extras = tuple(sorted(set(tuple(combined_ireq.extras) + tuple(ireq.extras))))
             yield combined_ireq
 
     def _resolve_one_round(self):
@@ -138,43 +174,45 @@ class Resolver(object):
         constraints = sorted(self.constraints, key=_dep_key)
         log.debug('Current constraints:')
         for constraint in constraints:
-            upstream.setdefault(constraint.req, [])
+            upstream.setdefault(RequirementSummary(constraint.req), [])
             log.debug('  {}'.format(constraint))
 
         log.debug('')
         log.debug('Finding the best candidates:')
-        best_matches = set(self.get_best_match(ireq) for ireq in constraints)
+        best_matches = {self.get_best_match(ireq) for ireq in constraints}
 
         # Find the new set of secondary dependencies
         log.debug('')
         log.debug('Finding secondary dependencies:')
-        theirs = set()
 
+        ungrouped = []
         for best_match in best_matches:
             for dep in self._iter_dependencies(best_match):
-                theirs.add(dep)
-                comes_from = dep.comes_from if dep.comes_from else best_match
-                upstream.setdefault(dep.req, []).append(comes_from.req)
+                if self.allow_unsafe or dep.name not in UNSAFE_PACKAGES:
+                    ungrouped.append(dep)
+                    comes_from = dep.comes_from if dep.comes_from else best_match
+                    upstream.setdefault(RequirementSummary(dep.req), []).append(comes_from.req)
+        # Grouping constraints to make clean diff between rounds
+        theirs = set(self._group_constraints(ungrouped))
 
-        # for ireq in best_matches:
-        #     if ireq.prepared:
-        #         version = ireq.pkg_info()['version']
-        #         if version not in ireq.req:
-        #             raise RuntimeError(
-        #                 'Version {} does not match {} for package {}'.format(
-        #                     version, ireq.req.specifier, ireq.name)
-        #             )
-
-        # NOTE: We need to compare the underlying Requirement objects, since
+        # NOTE: We need to compare RequirementSummary objects, since
         # InstallRequirement does not define equality
-        diff = {t.req for t in theirs} - {t.req for t in self.their_constraints}
-        has_changed = len(diff) > 0
+        theirs_summary = {RequirementSummary(t.req) for t in theirs}
+        their_constraints_summary = {RequirementSummary(t.req) for t in self.their_constraints}
+
+        diff = theirs_summary - their_constraints_summary
+        removed = their_constraints_summary - theirs_summary
+
+        has_changed = diff or removed
+
         if has_changed:
             log.debug('')
+
             log.debug('New dependencies found in this round:')
-            for new_dependency in sorted(diff, key=lambda req: req.key):
+            added = {RequirementSummary(t.req) for t in ungrouped} - their_constraints_summary
+            for new_dependency in sorted(added, key=lambda req: key_from_req(req)):
                 comes_from = sorted(
-                    upstream[new_dependency], key=lambda req: req.key)
+                    upstream[new_dependency], key=lambda req: key_from_req(req))
                 comes_from_formatted = [
                     click.style(str(u), fg='yellow')
                     for u in comes_from
@@ -185,7 +223,7 @@ class Resolver(object):
                 ))
 
         # Store the last round's results in the their_constraints
-        self.their_constraints |= theirs
+        self.their_constraints = theirs
         return has_changed, best_matches
 
     def get_best_match(self, ireq):
@@ -249,7 +287,7 @@ class Resolver(object):
         log.debug('  {:25} requires {}'.format(format_requirement(ireq),
                                                ', '.join(sorted(dependency_strings, key=lambda s: s.lower())) or '-'))
         for dependency_string in dependency_strings:
-            yield InstallRequirement.from_line(dependency_string)
+            yield InstallRequirement.from_line(dependency_string, constraint=ireq.constraint)
 
     def reverse_dependencies(self, ireqs):
         tups = [ireq for ireq in ireqs if is_pinned_requirement(ireq)]

@@ -2,7 +2,9 @@
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import sys
 from itertools import chain, groupby
+from collections import OrderedDict
 
 import pip
 
@@ -12,24 +14,55 @@ from pip.download import is_vcs_url, _get_used_vcs_backend
 
 from .click import style
 
-pip_version_info = tuple(int(digit) for digit in pip.__version__.split('.')[:2])
+
+def safeint(s):
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
+
+pip_version_info = tuple(safeint(digit) for digit in pip.__version__.split('.'))
+
+UNSAFE_PACKAGES = {'setuptools', 'distribute', 'pip'}
+
+
+def assert_compatible_pip_version():
+    # Make sure we're using a reasonably modern version of pip
+    if not pip_version_info >= (8, 0):
+        print('pip-compile requires at least version 8.0 of pip ({} found), '
+              'perhaps run `pip install --upgrade pip`?'.format(pip.__version__))
+        sys.exit(4)
+
+
+def key_from_req(req):
+    """Get an all-lowercase version of the requirement's name."""
+    if hasattr(req, 'key'):
+        # pip 8.1.1 or below, using pkg_resources
+        key = req.key
+    else:
+        # pip 8.1.2 or above, using packaging
+        key = req.name
+
+    key = key.replace('_', '-').lower()
+    return key
 
 
 def comment(text):
     return style(text, fg='green')
 
 
-def make_install_requirement(name, version, extras):
+def make_install_requirement(name, version, extras, constraint=False):
     # If no extras are specified, the extras string is blank
     extras_string = ""
     if extras:
         # Sort extras for stability
         extras_string = "[{}]".format(",".join(sorted(extras)))
 
-    return InstallRequirement.from_line('{}{}=={}'.format(name, extras_string, str(version)))
+    return InstallRequirement.from_line('{}{}=={}'.format(name, extras_string, str(version)), constraint=constraint)
 
 
-def format_requirement(ireq, include_specifier=True):
+def format_requirement(ireq, marker=None):
     """
     Generic formatter for pretty printing InstallRequirements to the terminal
     in a less verbose way than using its `__str__` method.
@@ -43,10 +76,12 @@ def format_requirement(ireq, include_specifier=True):
             vcs_backend = _get_used_vcs_backend(ireq.link)
             rev = vcs_backend.get_revision(ireq.source_dir)
             line += '@{}'.format(rev)
-    elif include_specifier:
-        line = str(ireq.req)
     else:
-        line = ireq.req.project_name
+        line = str(ireq.req).lower()
+
+    if marker:
+        line = '{} ; {}'.format(line, marker)
+
     return line
 
 
@@ -99,9 +134,9 @@ def as_tuple(ireq):
     if not is_pinned_requirement(ireq):
         raise TypeError('Expected a pinned InstallRequirement, got {}'.format(ireq))
 
-    name = ireq.req.key
+    name = key_from_req(ireq.req)
     version = first(ireq.specifier._specs)._spec[1]
-    extras = ireq.extras
+    extras = tuple(sorted(ireq.extras))
     return name, version, extras
 
 
@@ -178,3 +213,10 @@ def lookup_table(values, key=None, keyval=None, unique=False, use_lists=False):
         else:
             s.add(v)
     return dict(lut)
+
+
+def dedup(iterable):
+    """Deduplicate an iterable object like iter(set(iterable)) but
+    order-reserved.
+    """
+    return iter(OrderedDict.fromkeys(iterable))

@@ -10,7 +10,7 @@ import pytest
 
         (['Flask'],
          ['flask==0.10.1', 'itsdangerous==0.24', 'markupsafe==0.23',
-         'jinja2==2.7.3', 'werkzeug==0.10.4']),
+          'jinja2==2.7.3', 'werkzeug==0.10.4']),
 
         (['Jinja2', 'markupsafe'],
          ['jinja2==2.7.3', 'markupsafe==0.23']),
@@ -66,10 +66,50 @@ import pytest
              'pygments==1.5',
              'sphinx==0.3']
          ),
+
+        # We must remove child dependencies from result if parent is removed (e.g. vine from amqp>=2.0)
+        # See: GH-370
+        # because of upated dependencies in the test index, we need to pin celery
+        # in order to reproduce vine removal (because it was readded in later releases)
+        (['celery<=3.1.23', 'librabbitmq'],
+         [
+            'amqp==1.4.9',
+            'anyjson==0.3.3',
+            'billiard==3.5.0.2',
+            'celery==3.1.23',
+            'kombu==3.0.35',
+            'librabbitmq==1.6.1',
+            'pytz==2016.4']
+         ),
+
+        # Support specifying loose top-level requirements that could also appear as
+        # pinned subdependencies.
+        (['billiard', 'celery',
+          'fake-piptools-test-with-pinned-deps'],
+         [
+            'amqp==1.4.9',
+            'anyjson==0.3.3',
+            'billiard==3.3.0.23',
+            'celery==3.1.18',  # this is pinned from test subdependency
+            'fake-piptools-test-with-pinned-deps==0.1',
+            'kombu==3.0.35',
+            'pytz==2016.4']
+         ),
+
+        # Exclude package dependcy of setuptools as it is unsafe.
+        (['html5lib'], ['html5lib==0.999999999']),
+
+        # We shouldn't include irrelevant pip constraints
+        # See: GH-471
+        (['Flask', ('click', True), ('itsdangerous', True)],
+         ['flask==0.10.1', 'itsdangerous==0.24', 'markupsafe==0.23',
+          'jinja2==2.7.3', 'werkzeug==0.10.4']
+         ),
     ])
 )
 def test_resolver(resolver, from_line, input, expected, prereleases):
-    input = [from_line(line) for line in input]
+    input = [line if isinstance(line, tuple) else (line, False) for line in input]
+    input = [from_line(req[0], constraint=req[1]) for req in input]
     output = resolver(input, prereleases=prereleases).resolve()
     output = {str(line) for line in output}
     assert output == {str(line) for line in expected}
