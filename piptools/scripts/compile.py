@@ -9,7 +9,10 @@ import tempfile
 import logging
 
 import pip
-from pip.req import InstallRequirement, parse_requirements
+try:
+    from pip._internal.req import InstallRequirement, parse_requirements
+except ImportError:
+    from pip.req import InstallRequirement, parse_requirements
 
 from .. import click
 from ..exceptions import PipToolsError

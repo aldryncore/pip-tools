@@ -1,6 +1,9 @@
 from pytest import fixture
 
-from pip.index import FormatControl
+try:
+    from pip._internal.index import FormatControl
+except ImportError:
+    from pip.index import FormatControl
 from piptools.utils import comment
 from piptools.writer import OutputWriter
 

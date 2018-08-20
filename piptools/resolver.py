@@ -8,7 +8,10 @@ from functools import partial
 from itertools import chain, count
 
 from first import first
-from pip.req import InstallRequirement
+try:
+    from pip._internal.req import InstallRequirement
+except ImportError:
+    from pip.req import InstallRequirement
 
 from . import click
 from .cache import DependencyCache

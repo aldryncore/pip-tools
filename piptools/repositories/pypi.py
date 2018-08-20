@@ -6,13 +6,19 @@ import hashlib
 import os
 from shutil import rmtree
 
-from pip.download import unpack_url
-from pip.index import PackageFinder
-from pip.req.req_set import RequirementSet
 try:
-    from pip.utils.hashes import FAVORITE_HASH
+    from pip._internal.req import RequirementSet
+    from pip._internal.download import unpack_url
+    from pip._internal.index import PackageFinder
+    from pip._internal.utils.hashes import FAVORITE_HASH
 except ImportError:
-    FAVORITE_HASH = 'sha256'
+    from pip.req import RequirementSet
+    from pip.download import unpack_url
+    from pip.index import PackageFinder
+    try:
+        from pip.utils.hashes import FAVORITE_HASH
+    except ImportError:
+        FAVORITE_HASH = 'sha256'
 
 from ..cache import CACHE_DIR
 from ..exceptions import NoCandidateFound

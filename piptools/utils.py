@@ -9,8 +9,12 @@ from collections import OrderedDict
 import pip
 
 from first import first
-from pip.req import InstallRequirement
-from pip.download import is_vcs_url, _get_used_vcs_backend
+try:
+    from pip._internal.req import InstallRequirement
+    from pip._internal.download import is_vcs_url, _get_used_vcs_backend
+except ImportError:
+    from pip.req import InstallRequirement
+    from pip.download import is_vcs_url, _get_used_vcs_backend
 
 from .click import style
 
