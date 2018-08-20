@@ -10,8 +10,12 @@ import logging
 
 try:
     from pip._internal.req import InstallRequirement, parse_requirements
-    from pip._internal.cli.base_command import Command
-    from pip._internal.cli import cmdoptions
+    try:
+        from pip._internal.cli.base_command import Command
+        from pip._internal.cli import cmdoptions
+    except ImportError:
+        from pip._internal.basecommand import Command
+        from pip._internal import cmdoptions
 except ImportError:
     from pip.req import InstallRequirement, parse_requirements
     from pip.basecommand import Command
