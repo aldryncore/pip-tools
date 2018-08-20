@@ -8,11 +8,14 @@ import sys
 import tempfile
 import logging
 
-import pip
 try:
     from pip._internal.req import InstallRequirement, parse_requirements
+    from pip._internal.cli.base_command import Command
+    from pip._internal.cli import cmdoptions
 except ImportError:
     from pip.req import InstallRequirement, parse_requirements
+    from pip.basecommand import Command
+    from pip import cmdoptions
 
 from .. import click
 from ..exceptions import PipToolsError
@@ -29,7 +32,7 @@ assert_compatible_pip_version()
 DEFAULT_REQUIREMENTS_FILE = 'requirements.in'
 
 
-class PipCommand(pip.basecommand.Command):
+class PipCommand(Command):
     name = 'PipCommand'
 
 
@@ -258,8 +261,8 @@ def get_pip_command():
     # General options (find_links, index_url, extra_index_url, trusted_host,
     # and pre) are defered to pip.
     pip_command = PipCommand()
-    index_opts = pip.cmdoptions.make_option_group(
-        pip.cmdoptions.index_group,
+    index_opts = cmdoptions.make_option_group(
+        cmdoptions.index_group,
         pip_command.parser,
     )
     pip_command.parser.insert_option_group(0, index_opts)

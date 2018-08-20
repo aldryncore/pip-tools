@@ -5,7 +5,12 @@ from __future__ import (absolute_import, division, print_function,
 import os
 import sys
 
-import pip
+try:
+    from pip._internal.req import parse_requirements
+    from pip._internal.utils.misc import get_installed_distributions
+except ImportError:
+    from pip.req import parse_requirements
+    from pip.utils.misc import get_installed_distributions
 
 from .. import click, sync
 from ..exceptions import PipToolsError
@@ -46,7 +51,7 @@ def cli(dry_run, force, find_links, index_url, extra_index_url, no_index, src_fi
             log.error('ERROR: ' + msg)
             sys.exit(2)
 
-    requirements = flat_map(lambda src: pip.req.parse_requirements(src, session=True),
+    requirements = flat_map(lambda src: parse_requirements(src, session=True),
                             src_files)
 
     try:
@@ -55,7 +60,7 @@ def cli(dry_run, force, find_links, index_url, extra_index_url, no_index, src_fi
         log.error(str(e))
         sys.exit(2)
 
-    installed_dists = pip.get_installed_distributions(skip=[])
+    installed_dists = get_installed_distributions(skip=[])
     to_install, to_uninstall = sync.diff(requirements, installed_dists)
 
     install_flags = []
