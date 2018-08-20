@@ -17,7 +17,8 @@ setup(
         'click>=6',
         'first',
         'six',
-        'setuptools'
+        'setuptools',
+        'pip<10',
     ],
     zip_safe=False,
     entry_points={
