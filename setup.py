@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 
 setup(
     name='pip-tools',
-    version='1.9.0.1',
+    version='1.9.0.2',
     url='https://github.com/jazzband/pip-tools/',
     license='BSD',
     author='Vincent Driessen',
